@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric/consensus"
+	"github.com/hyperledger/fabric/consensus/obcpbft/events"
 	pb "github.com/hyperledger/fabric/protos"
 
 	"github.com/golang/protobuf/proto"
@@ -35,12 +36,12 @@ type obcBatch struct {
 
 	batchSize        int
 	batchStore       []*Request
-	batchTimer       eventTimer
+	batchTimer       events.Timer
 	batchTimerActive bool
 	batchTimeout     time.Duration
 	inViewChange     bool
 
-	manager eventManager // TODO, remove eventually, the event manager
+	manager events.Manager // TODO, remove eventually, the event manager
 
 	incomingChan chan *batchMessage // Queues messages for processing by main thread
 	idleChan     chan struct{}      // Idle channel, to be removed
@@ -67,6 +68,17 @@ type execInfo struct {
 	raw   []byte
 }
 
+// Event types
+
+// batchMessageEvent is sent when a consensus messages is received to be sent to pbft
+type batchMessageEvent batchMessage
+
+// batchTimerEvent is sent when the batch timer expires
+type batchTimerEvent struct{}
+
+// complaintEvent is sent when custody has a complaint
+type complaintEvent custodyInfo
+
 func newObcBatch(id uint64, config *viper.Viper, stack consensus.Stack) *obcBatch {
 	var err error
 
@@ -78,13 +90,11 @@ func newObcBatch(id uint64, config *viper.Viper, stack consensus.Stack) *obcBatc
 
 	logger.Debug("Replica %d obtaining startup information", id)
 
-	op.manager = newEventManagerImpl() // TODO, this is hacky, eventually rip it out
-	op.manager.setReceiver(op)
-	etf := newEventTimerFactoryImpl(op.manager)
+	op.manager = events.NewManagerImpl() // TODO, this is hacky, eventually rip it out
+	op.manager.SetReceiver(op)
+	etf := events.NewTimerFactoryImpl(op.manager)
 	op.pbft = newPbftCore(id, config, op, etf)
-	op.pbft.newViewTimer.halt()
-	op.pbft.newViewTimer = etf.createTimer()
-	op.manager.start()
+	op.manager.Start()
 	op.externalEventReceiver.manager = op.manager
 
 	op.batchSize = config.GetInt("general.batchSize")
@@ -99,7 +109,7 @@ func newObcBatch(id uint64, config *viper.Viper, stack consensus.Stack) *obcBatc
 	op.complainer = newComplainer(op, op.pbft.requestTimeout, op.pbft.requestTimeout)
 	op.deduplicator = newDeduplicator()
 
-	op.batchTimer = etf.createTimer()
+	op.batchTimer = etf.CreateTimer()
 
 	op.idleChan = make(chan struct{})
 	close(op.idleChan) // TODO remove eventually
@@ -110,17 +120,17 @@ func newObcBatch(id uint64, config *viper.Viper, stack consensus.Stack) *obcBatc
 // Complain is necessary to implement complaintHandler
 func (op *obcBatch) Complain(hash string, req *Request, primaryFail bool) {
 	c := complaintEvent{hash, req, primaryFail}
-	op.manager.queue() <- c
+	op.manager.Queue() <- c
 }
 
 // Close tells us to release resources we are holding
 func (op *obcBatch) Close() {
 	op.complainer.Stop()
-	op.batchTimer.stop()
+	op.batchTimer.Halt()
 	op.pbft.close()
 }
 
-func (op *obcBatch) submitToLeader(req *Request) event {
+func (op *obcBatch) submitToLeader(req *Request) events.Event {
 	// submit to current leader
 	leader := op.pbft.primary(op.pbft.view)
 	if leader == op.pbft.id && op.pbft.activeView {
@@ -194,13 +204,6 @@ func (op *obcBatch) validate(txRaw []byte) error {
 
 // execute an opaque request which corresponds to an OBC Transaction
 func (op *obcBatch) execute(seqNo uint64, raw []byte) {
-	op.manager.queue() <- batchExecEvent{
-		seqNo: seqNo,
-		raw:   raw,
-	}
-}
-
-func (op *obcBatch) executeImpl(seqNo uint64, raw []byte) {
 	reqs := &RequestBlock{}
 	if err := proto.Unmarshal(raw, reqs); err != nil {
 		logger.Warning("Batch replica %d could not unmarshal request block: %s", op.pbft.id, err)
@@ -230,6 +233,10 @@ func (op *obcBatch) executeImpl(seqNo uint64, raw []byte) {
 
 	meta, _ := proto.Marshal(&Metadata{seqNo})
 
+	go op.executeImpl(txs, meta)
+}
+
+func (op *obcBatch) executeImpl(txs []*pb.Transaction, meta []byte) {
 	id := []byte("foo")
 	op.stack.BeginTxBatch(id)
 	result, err := op.stack.ExecTxs(id, txs)
@@ -237,14 +244,14 @@ func (op *obcBatch) executeImpl(seqNo uint64, raw []byte) {
 	_ = result // XXX what to do with the result?
 	_, err = op.stack.CommitTxBatch(id, meta)
 
-	op.pbft.execDoneSync()
+	op.manager.Queue() <- execDoneEvent{}
 }
 
 // =============================================================================
 // functions specific to batch mode
 // =============================================================================
 
-func (op *obcBatch) leaderProcReq(req *Request) event {
+func (op *obcBatch) leaderProcReq(req *Request) events.Event {
 	// XXX check req sig
 
 	if !op.deduplicator.Request(req) {
@@ -269,7 +276,7 @@ func (op *obcBatch) leaderProcReq(req *Request) event {
 	return nil
 }
 
-func (op *obcBatch) sendBatch() event {
+func (op *obcBatch) sendBatch() events.Event {
 	op.stopBatchTimer()
 
 	reqBlock := &RequestBlock{op.batchStore}
@@ -303,7 +310,7 @@ func (op *obcBatch) txToReq(tx []byte) *Request {
 	return req
 }
 
-func (op *obcBatch) processMessage(ocMsg *pb.Message, senderHandle *pb.PeerID) event {
+func (op *obcBatch) processMessage(ocMsg *pb.Message, senderHandle *pb.PeerID) events.Event {
 	if ocMsg.Type == pb.Message_CHAIN_TRANSACTION {
 		req := op.txToReq(ocMsg.Payload)
 		hash := op.complainer.Custody(req)
@@ -372,7 +379,7 @@ func (op *obcBatch) processMessage(ocMsg *pb.Message, senderHandle *pb.PeerID) e
 // this request raced with a later one and lost, then we need to
 // repackage this request's payload into a new request and resubmit
 // it.
-func (op *obcBatch) resubmitStaleRequest(c complaintEvent) event {
+func (op *obcBatch) resubmitStaleRequest(c complaintEvent) events.Event {
 	oldReq := c.req.(*Request)
 
 	if !op.complainer.InCustody(oldReq) {
@@ -391,7 +398,7 @@ func (op *obcBatch) resubmitStaleRequest(c complaintEvent) event {
 }
 
 // allow the primary to send a batch when the timer expires
-func (op *obcBatch) processEvent(event interface{}) interface{} {
+func (op *obcBatch) ProcessEvent(event events.Event) events.Event {
 	logger.Debug("Replica %d batch main thread looping", op.pbft.id)
 	switch et := event.(type) {
 	case batchMessageEvent:
@@ -420,9 +427,6 @@ func (op *obcBatch) processEvent(event interface{}) interface{} {
 			logger.Info("Replica %d resubmitting request under custody: %s", op.pbft.id, pair.Hash)
 			return op.submitToLeader(pair.Request)
 		}
-	case batchExecEvent:
-		execInfo := et
-		op.executeImpl(execInfo.seqNo, execInfo.raw)
 	case complaintEvent:
 		c := et
 		logger.Debug("Replica %d processing complaint from custodian", op.pbft.id)
@@ -444,20 +448,20 @@ func (op *obcBatch) processEvent(event interface{}) interface{} {
 			}
 		}
 	default:
-		return op.pbft.processEvent(event)
+		return op.pbft.ProcessEvent(event)
 	}
 
 	return nil
 }
 
 func (op *obcBatch) startBatchTimer() {
-	op.batchTimer.reset(op.batchTimeout, batchTimerEvent{})
+	op.batchTimer.Reset(op.batchTimeout, batchTimerEvent{})
 	logger.Debug("Replica %d started the batch timer", op.pbft.id)
 	op.batchTimerActive = true
 }
 
 func (op *obcBatch) stopBatchTimer() {
-	op.batchTimer.stop()
+	op.batchTimer.Stop()
 	logger.Debug("Replica %d stopped the batch timer", op.pbft.id)
 	op.batchTimerActive = false
 }
@@ -480,6 +484,6 @@ func (op *obcBatch) idleChannel() <-chan struct{} {
 }
 
 // TODO, temporary
-func (op *obcBatch) getManager() eventManager {
+func (op *obcBatch) getManager() events.Manager {
 	return op.manager
 }
