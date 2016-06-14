@@ -43,6 +43,7 @@ type Helper struct {
 	curBatch     []*pb.Transaction       // TODO, remove after issue 579
 	curBatchErrs []*pb.TransactionResult // TODO, remove after issue 579
 	persist.Helper
+	stateTransfering bool // Whether state transfer is active
 
 	sts *statetransfer.StateTransferState
 }
@@ -56,7 +57,6 @@ func NewHelper(mhc peer.MessageHandlerCoordinator) *Helper {
 		valid:       true, // Assume our state is consistent until we are told otherwise, TODO: revisit
 	}
 	h.sts = statetransfer.NewStateTransferState(mhc)
-	h.sts.RegisterListener(h)
 	return h
 }
 
@@ -136,7 +136,7 @@ func (h *Helper) Verify(replicaID *pb.PeerID, signature []byte, message []byte) 
 		return nil
 	}
 
-	logger.Debug("Verify message from: %v", replicaID.Name)
+	logger.Debugf("Verify message from: %v", replicaID.Name)
 	_, network, err := h.GetNetworkInfo()
 	if err != nil {
 		return fmt.Errorf("Couldn't retrieve validating network's endpoints: %v", err)
@@ -145,7 +145,7 @@ func (h *Helper) Verify(replicaID *pb.PeerID, signature []byte, message []byte) 
 	// check that the sender is a valid replica
 	// if so, call crypto verify() with that endpoint's pkiID
 	for _, endpoint := range network {
-		logger.Debug("Endpoint name: %v", endpoint.ID.Name)
+		logger.Debugf("Endpoint name: %v", endpoint.ID.Name)
 		if *replicaID == *endpoint.ID {
 			cryptoID := endpoint.PkiID
 			return h.secHelper.Verify(cryptoID, signature, message)
@@ -313,9 +313,33 @@ func (h *Helper) SkipTo(tag uint64, id []byte, peers []*pb.PeerID) {
 	if h.valid {
 		logger.Warning("State transfer is being called for, but the state has not been invalidated")
 	}
-	info := &pb.BlockchainInfo{}
-	proto.Unmarshal(id, info)
-	h.sts.AddTarget(info.Height-1, info.CurrentBlockHash, peers, tag)
+
+	// This looks racey, but this should always be called in a serial fashion so it should not be, also this will be removed when the executor is introduced
+	// This is just a temporary hack to enable legacy-like behavior until the executor is finished
+	if !h.stateTransfering {
+		h.stateTransfering = true
+		info := &pb.BlockchainInfo{}
+		proto.Unmarshal(id, info)
+		go func() {
+			h.Initiated(info.Height-1, info.CurrentBlockHash, peers, tag)
+
+			for {
+				err, recoverable := h.sts.SyncToTarget(info.Height-1, info.CurrentBlockHash, peers)
+				if err != nil {
+					h.Errored(info.Height-1, info.CurrentBlockHash, peers, tag, err)
+				}
+				if !recoverable {
+					break
+				}
+				if err != nil {
+					h.Completed(info.Height-1, info.CurrentBlockHash, peers, tag)
+					break
+				}
+			}
+			h.stateTransfering = false
+
+		}()
+	}
 }
 
 // InvalidateState is invoked to tell us that consensus realizes the ledger is out of sync
@@ -343,8 +367,8 @@ func (h *Helper) Completed(bn uint64, bh []byte, pids []*pb.PeerID, m interface{
 // Errored is called when state transfer encounters an error, this is not necessarily fatal
 func (h *Helper) Errored(bn uint64, bh []byte, pids []*pb.PeerID, m interface{}, e error) {
 	if seqNo, ok := m.(uint64); !ok {
-		logger.Warning("state transfer reported error for block %d, seqNo %d: %s", bn, seqNo, e)
+		logger.Warningf("state transfer reported error for block %d, seqNo %d: %s", bn, seqNo, e)
 	} else {
-		logger.Warning("state transfer reported error for block %d, %s", bn, e)
+		logger.Warningf("state transfer reported error for block %d, %s", bn, e)
 	}
 }
