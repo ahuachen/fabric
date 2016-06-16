@@ -73,22 +73,6 @@ eca:
 
                 vp: 4 f3489fy98ghf
 
-pki:
-          validity-period:
-                 # Setting the update property will prevent the invocation of the update_validity_period system chaincode to update the validity period.
-                 update: false
-                 chaincodeHash: 6091c3abd07c18edd6ef48ae24cfe409522f7defb51e4103dfa61ca3012386380c1b179f904375e253f20f4b2c5c848299988e65d8b80cb3f6b3d848b6fb2230
-                 # TLS Settings for communications to update the validity period
-                 tls:
-                         enabled: false
-                         cert:
-                                file: testdata/server1.pem
-                         key:
-                                file: testdata/server1.key
-                         # The server name use to verify the hostname returned by TLS handshake
-                         server-host-override:
-                 devops-address: 0.0.0.0:40404
-
 ###############################################################################
 #
 #    CLI section
@@ -191,15 +175,15 @@ peer:
 
 
     # The Address this Peer will listen on
-    listenAddress: 0.0.0.0:40404
+    listenAddress: 0.0.0.0:41414
     # The Address this Peer will bind to for providing services
-    address: 0.0.0.0:40404
+    address: 0.0.0.0:41414
     # Whether the Peer should programmatically determine the address to bind to.
     # This case is useful for docker containers.
     addressAutoDetect: false
 
     # Peer port to accept connections on
-    port:    40404
+    port:    41414
     # Setting for runtime.GOMAXPROCS(n). If n < 1, it does not change the current setting
     gomaxprocs: -1
     workers: 2
@@ -253,10 +237,6 @@ peer:
             # if 0, if buffer full, will block and guarantee the event will be sent out
             # if > 0, if buffer full, blocks till timeout
             timeout: 10
-        # Setting the validity-period.verification to false will disable the verification
-        # of the validity period in the validator
-        validity-period:
-            verification: false
 
     # TLS Settings for p2p communications
     tls:
@@ -297,10 +277,10 @@ peer:
         # testNodes:
         #    - node   : 1
         #      ip     : 127.0.0.1
-        #      port   : 40404
+        #      port   : 41414
         #    - node   : 2
         #      ip     : 127.0.0.1
-        #      port   : 40404
+        #      port   : 41414
 
         # Should the discovered nodes and their reputations
         # be stored in DB and persisted between restarts
