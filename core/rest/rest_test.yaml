@@ -38,36 +38,40 @@ rest:
 ###############################################################################
 logging:
 
-    # Default logging levels are specified here for each of the three peer
-    # commands 'node', 'network' and 'chaincode'. For commands that have
-    # subcommands, the defaults also apply to all subcommands of the command.
     # Valid logging levels are case-insensitive strings chosen from
 
     #     CRITICAL | ERROR | WARNING | NOTICE | INFO | DEBUG
 
-    # The logging levels specified here can be overridden in various ways,
-    # listed below from strongest to weakest:
-    #
-    # 1. The --logging-level=<level> command line option overrides all other
-    #    specifications.
-    #
-    # 2. The environment variable CORE_LOGGING_LEVEL otherwise applies to
-    #    all peer commands if defined as a non-empty string.
-    #
-    # 3. The environment variables CORE_LOGGING_[NODE|NETWORK|CHAINCODE]
-    #    otherwise apply to the respective peer commands if defined as non-empty
-    #    strings. 
-    #
-    # 4. Otherwise, the specifications below apply.
-    #
-    # Developers: Please see fabric/docs/dev-setup/logging-control.md for more
-    # options. 
+    # Logging 'module' names are also strings, however valid module names are
+    # defined at runtime and are not checked for validity during option
+    # processing.
 
-    node:      info
-    network:   warning
+    # Default logging levels are specified here for each of the peer
+    # commands. For commands that have subcommands, the defaults also apply to
+    # all subcommands of the command. These logging levels can be overridden
+    # on the command line using the --logging-level command-line option, or by
+    # setting the CORE_LOGGING_LEVEL environment variable.
+
+    # The logging level specification is of the form
+
+    #     [<module>[,<module>...]=]<level>[:[<module>[,<module>...]=]<level>...]
+
+    # A logging level by itself is taken as the overall default. Otherwise,
+    # overrides for individual or groups of modules can be specified using the
+    # <module>[,<module>...]=<level> syntax.
+
+    # Examples:
+    #   info                                       - Set default to INFO
+    #   warning:main,db=debug:chaincode=info       - Override default WARNING in main,db,chaincode
+    #   chaincode=info:main=debug:db=debug:warning - Same as above
+    peer:      debug
+    crypto:    info
+    status:    warning
+    stop:      warning
+    login:     warning
+    vm:        warning
     chaincode: warning
 
-    crypto:    info # This should not be here; See issue #769
 
 ###############################################################################
 #
@@ -152,7 +156,7 @@ peer:
             # if 0, if buffer full, will block and guarantee the event will be sent out
             # if > 0, if buffer full, blocks till timeout
             timeout: 10
-
+        
     # TLS Settings for p2p communications
     tls:
         enabled:  false
@@ -202,6 +206,17 @@ peer:
         # be stored in DB and persisted between restarts
         persist:    true
 
+        # if peer discovery is off
+        # the peer window will show
+        # only what retrieved by active
+        # peer [true/false]
+        enabled:    true
+
+        # number of workers that
+        # tast the peers for being
+        # online [1..10]
+        workers: 8
+
         # the period in seconds with which the discovery
         # tries to reconnect to successful nodes
         # 0 means the nodes are not reconnected
@@ -212,7 +227,7 @@ peer:
         touchMaxNodes: 100
 
     # Path on the file system where peer will store data
-    fileSystemPath: /var/hyperledger/production
+    fileSystemPath: /var/hyperledger/test/rest_test
 
 
     profile:
@@ -246,7 +261,7 @@ vm:
         # If you have your own ipam & dns-server for cluster you can use them to create container efficient.
         # NetworkMode Sets the networking mode for the container. Supported standard values are: `host`(default),`bridge`,`ipvlan`,`none`
         # dns A list of DNS servers for the container to use.
-        # note: not support customize for `Privileged`
+        # note: not support customize for `Privileged` 
         # LogConfig sets the logging driver (Type) and related options (Config) for Docker
         # you can refer https://docs.docker.com/engine/admin/logging/overview/ for more detail configruation.
         hostConfig:
@@ -258,6 +273,7 @@ vm:
                 Config:
                     max-size: "50m"
                     max-file: "5"
+            
 ###############################################################################
 #
 #    Chaincode section
@@ -310,7 +326,7 @@ chaincode:
     # the image
     installpath: /opt/gopath/bin/
 
-    # keepalive in seconds. In situations where the communiction goes through a
+    # keepalive in seconds. In situations where the communiction goes through a 
     # proxy that does not support keep-alive, this parameter will maintain connection
     # between peer and chaincode.
     # A value <= 0 turns keepalive off
@@ -377,7 +393,7 @@ security:
     # Enable security will force every entity on the network to enroll with obc-ca
     # and maintain a valid set of certificates in order to communicate with
     # other peers
-    enabled: false
+    enabled: true
     # To enroll NVP or VP with membersrvc. These parameters are for 1 time use.
     # They will not be valid on subsequent times without un-enroll first.
     # The values come from off-line registration with obc-ca. For testing, make

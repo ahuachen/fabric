@@ -65,7 +65,7 @@ def parseComposeOutput(context):
     for containerName in containerNames:
     	output, error, returncode = \
         	bdd_test_util.cli_call(context, ["docker", "inspect", "--format",  "{{ .NetworkSettings.IPAddress }}", containerName], expect_success=True)
-        #print("container {0} has address = {1}".format(containerName, output.splitlines()[0]))
+        print("container {0} has address = {1}".format(containerName, output.splitlines()[0]))
         ipAddress = output.splitlines()[0]
 
         # Get the environment array
@@ -126,6 +126,14 @@ def step_impl(context, path, containerName):
     assert resp.status_code == 200, "Failed to GET url %s:  %s" % (request_url,resp.text)
     context.response = resp
     print("")
+
+@then(u'I should get a JSON response containing "{attribute}" attribute')
+def step_impl(context, attribute):
+    assert attribute in context.response.json(), "Attribute not found in response (%s)" %(attribute)
+
+@then(u'I should get a JSON response containing no "{attribute}" attribute')
+def step_impl(context, attribute):
+    assert attribute not in context.response.json(), "Attribute found in response (%s)" %(attribute)
 
 @then(u'I should get a JSON response with "{attribute}" = "{expectedValue}"')
 def step_impl(context, attribute, expectedValue):
